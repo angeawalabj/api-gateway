@@ -107,6 +107,10 @@ services:
     build:
       context: ../../admin
     ports: ["3000:3000"]
+    depends_on:
+      gateway:
+        condition: service_healthy
+    restart: unless-stopped
 
 volumes:
   postgres_data:
