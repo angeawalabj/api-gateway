@@ -1,0 +1,8 @@
+# Copier en terraform.tfvars et adapter — jamais commiter le fichier réel
+# (terraform.tfvars est dans .gitignore).
+
+aws_region  = "eu-west-1"
+key_name    = "ma-keypair-ec2"          # keypair EC2 existante dans ce compte AWS
+db_password = "CHANGE-ME-IN-PRODUCTION" # mot de passe RDS PostgreSQL
+s3_bucket   = "mon-bucket-gateway"      # bucket S3 existant, contient le binaire gateway
+admin_cidr  = "0.0.0.0/0"               # CIDR autorisé pour l'admin UI — à restreindre en prod

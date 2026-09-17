@@ -1,0 +1,114 @@
+name: CI/CD — API Gateway
+#
+# build, build-admin et deploy sont sautés tant que la variable de repo
+# AWS_DEPLOY_ENABLED n'est pas mise à "true" (Settings > Secrets and
+# variables > Actions > Variables) — à activer une fois AWS_ACCESS_KEY_ID /
+# AWS_SECRET_ACCESS_KEY réellement configurés en secrets et une infra
+# Terraform appliquée. Sans ça, ces jobs échoueraient en tentant de
+# configurer des identifiants AWS et un EC2/S3 inexistants.
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+
+  test:
+    name: Tests Go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: gateway/go.sum
+      - name: Run tests
+        working-directory: gateway
+        run: go test ./... -v -race -count=1
+      - name: Benchmarks
+        working-directory: gateway
+        run: go test ./... -bench=. -benchtime=1s -run=^$ | head -20
+
+  build:
+    name: Build & push binary
+    runs-on: ubuntu-latest
+    needs: test
+    if: ${{ github.ref == 'refs/heads/main' && vars.AWS_DEPLOY_ENABLED == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+          cache-dependency-path: gateway/go.sum
+      - name: Build static binary
+        working-directory: gateway
+        run: |
+          CGO_ENABLED=0 GOOS=linux GOARCH=amd64 \
+          go build -ldflags="-w -s -X main.version=${{ github.sha }}" \
+          -o gateway-linux-amd64 ./cmd/gateway
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            eu-west-1
+      - name: Push to S3
+        working-directory: gateway
+        run: |
+          aws s3 cp gateway-linux-amd64 s3://${{ vars.S3_BUCKET }}/gateway/${{ github.sha }}/gateway-linux-amd64
+          aws s3 cp gateway-linux-amd64 s3://${{ vars.S3_BUCKET }}/gateway/latest/gateway-linux-amd64
+
+  build-admin:
+    name: Build admin UI
+    runs-on: ubuntu-latest
+    needs: test
+    if: ${{ github.ref == 'refs/heads/main' && vars.AWS_DEPLOY_ENABLED == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: "20", cache: npm, cache-dependency-path: admin/package-lock.json }
+      - name: Build
+        working-directory: admin
+        run: |
+          npm ci
+          VITE_API_URL=https://${{ vars.GATEWAY_DOMAIN }} npm run build
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            eu-west-1
+      - name: Sync to S3
+        working-directory: admin
+        run: aws s3 sync dist/ s3://${{ vars.S3_BUCKET }}/admin/ --delete
+
+  deploy:
+    name: Deploy to EC2
+    runs-on: ubuntu-latest
+    needs: [build, build-admin]
+    if: ${{ vars.AWS_DEPLOY_ENABLED == 'true' }}
+    environment:
+      name: production
+      url: http://${{ vars.EC2_HOST }}:8080
+    steps:
+      - name: Configure AWS
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id:     ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region:            eu-west-1
+      - name: Deploy via SSM
+        run: |
+          INSTANCE_ID=$(aws ec2 describe-instances \
+            --filters "Name=tag:Name,Values=api-gateway-prod" "Name=instance-state-name,Values=running" \
+            --query "Reservations[0].Instances[0].InstanceId" --output text)
+          aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --parameters 'commands=["aws s3 cp s3://${{ vars.S3_BUCKET }}/gateway/${{ github.sha }}/gateway-linux-amd64 /opt/gateway/gateway","chmod +x /opt/gateway/gateway","systemctl restart gateway"]'
+      - name: Health check
+        run: |
+          sleep 10
+          curl -sf http://${{ vars.EC2_HOST }}:8080/health

@@ -1,0 +1,115 @@
+name: api-gateway
+
+services:
+
+  gateway:
+    build:
+      context: ../../gateway
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    environment:
+      GATEWAY_ADDR:   ":8080"
+      METRICS_ADDR:   ":9090"
+      REDIS_ADDR:     "redis:6379"
+      POSTGRES_DSN:   "postgres://gwuser:gwpass@postgres:5432/gateway?sslmode=disable"
+      LOG_LEVEL:      "${LOG_LEVEL:-info}"
+      DEV_MODE:       "${DEV_MODE:-true}"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 10s
+      timeout:  5s
+      retries:  5
+
+  service-a:
+    build:
+      context: ../../services/upstream
+    environment:
+      PORT:         "8081"
+      SERVICE_NAME: "service-a"
+      LATENCY_MS:   "10"
+    ports: ["8081:8081"]
+
+  service-b:
+    build:
+      context: ../../services/upstream
+    environment:
+      PORT:         "8082"
+      SERVICE_NAME: "service-b"
+      LATENCY_MS:   "50"
+    ports: ["8082:8082"]
+
+  service-c:
+    build:
+      context: ../../services/upstream
+    environment:
+      PORT:         "8083"
+      SERVICE_NAME: "service-c"
+      LATENCY_MS:   "100"
+    ports: ["8083:8083"]
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB:       gateway
+      POSTGRES_USER:     gwuser
+      POSTGRES_PASSWORD: gwpass
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports: ["5432:5432"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gwuser -d gateway"]
+      interval: 5s
+      timeout:  3s
+      retries:  10
+
+  redis:
+    image: redis:7.2-alpine
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    ports: ["6379:6379"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout:  3s
+      retries:  10
+
+  prometheus:
+    image: prom/prometheus:v2.52.0
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    ports: ["9091:9090"]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.retention.time=7d
+
+  grafana:
+    image: grafana/grafana:10.4.2
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_AUTH_ANONYMOUS_ENABLED:  "true"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    ports: ["3001:3000"]
+    depends_on: [prometheus]
+
+  admin:
+    build:
+      context: ../../admin
+    ports: ["3000:3000"]
+
+volumes:
+  postgres_data:
+  redis_data:
+  prometheus_data:
+  grafana_data:

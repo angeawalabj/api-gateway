@@ -1,0 +1,31 @@
+# Go
+gateway/gateway-linux-amd64
+*.exe
+*.test
+*.out
+
+# Node / admin UI
+admin/node_modules/
+admin/dist/
+admin/.vite/
+
+# Terraform
+infra/terraform/**/.terraform/
+infra/terraform/**/*.tfstate
+infra/terraform/**/*.tfstate.*
+infra/terraform/**/.terraform.lock.hcl
+infra/terraform/**/terraform.tfvars
+!infra/terraform/**/terraform.tfvars.example
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# OS / editors
+.DS_Store
+.vscode/
+.idea/
+
+# Misc
+*.log
