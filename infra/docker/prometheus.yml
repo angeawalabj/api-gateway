@@ -13,8 +13,8 @@ scrape_configs:
     metrics_path: /metrics
     scrape_interval: 5s
 
-  - job_name: upstreams
-    static_configs:
-      - targets: [service-a:8081, service-b:8082, service-c:8083]
-    metrics_path: /health
-    scrape_interval: 30s
+  # Pas de job "upstreams" ici : service-a/b/c sont des backends de demo
+  # (services/upstream) qui n'exposent que /health en JSON, pas de
+  # /metrics au format Prometheus. Un scrape avec metrics_path: /health
+  # échoue au parsing et affiche ces cibles comme "down" en permanence,
+  # ce qui donne une fausse alerte plutôt qu'un vrai signal de sante.
