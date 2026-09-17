@@ -115,7 +115,11 @@ func TestTenantResolve_InjectsUpstream(t *testing.T) {
 // ─── RateLimit tests ──────────────────────────────────────────────────────────
 
 func TestRateLimit_AllowedSetsHeaders(t *testing.T) {
-	h := middleware.RateLimit(&mockLimiter{}, newRepo())(http.HandlerFunc(ok200))
+	// RateLimit lit le tenant depuis le contexte : dans la vraie chaîne
+	// (router.go), TenantResolve tourne avant. On reproduit cet ordre ici,
+	// sinon TenantIDFrom(ctx) est vide et RateLimit se contente de passer
+	// la main sans jamais consulter le limiter.
+	h := middleware.TenantResolve(newRepo())(middleware.RateLimit(&mockLimiter{}, newRepo())(http.HandlerFunc(ok200)))
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-API-Key", "key-a")
 	rw := httptest.NewRecorder()
@@ -135,7 +139,7 @@ func TestRateLimit_Blocked429(t *testing.T) {
 		allowed: false, limit: 10, remaining: 0,
 		resetAt: time.Now().Add(time.Second), window: "per_second",
 	}}
-	h := middleware.RateLimit(lim, newRepo())(http.HandlerFunc(ok200))
+	h := middleware.TenantResolve(newRepo())(middleware.RateLimit(lim, newRepo())(http.HandlerFunc(ok200)))
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("X-API-Key", "key-a")
 	rw := httptest.NewRecorder()
